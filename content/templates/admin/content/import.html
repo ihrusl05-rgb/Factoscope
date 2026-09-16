@@ -1,0 +1,76 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>Импорт контента (XML/JSON/Excel)</h1>
+
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <p>
+    <input type="file" name="file" accept=".json,.xml,.xlsx,.csv" required>
+    <button type="submit" name="action" value="preview" class="button">Предпросмотр</button>
+  </p>
+</form>
+<p style="color:#666; font-size:12px;">
+  Excel/CSV: колонки <b>date</b> (или дата), <b>sign</b> (знак), <b>forecast</b> (текст), <b>advice</b> (совет, опц.).
+  Такие файлы после импорта помечаются <b>Черновик</b> — на экранах не показываются, пока не приняты в админке.
+</p>
+
+{% if error %}
+  <p style="color:#ba2121; font-weight:bold;">{{ error }}</p>
+{% endif %}
+
+{% if preview %}
+  <h2>Предпросмотр {{ filename }}</h2>
+  <table style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr style="text-align:left;">
+        <th style="border-bottom:1px solid #ccc; padding:6px;">Запись</th>
+        <th style="border-bottom:1px solid #ccc; padding:6px;">Действие</th>
+        <th style="border-bottom:1px solid #ccc; padding:6px;">Детали</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in preview %}
+        <tr>
+          <td style="border-bottom:1px solid #eee; padding:6px;">
+            {% if row.status == "error" %}
+              <span style="color:#ba2121;">{{ row.kind }} #{{ row.row }}</span>
+            {% else %}
+              <b>{{ row.key }}</b>
+            {% endif %}
+          </td>
+          <td style="border-bottom:1px solid #eee; padding:6px;">
+            {% if row.status == "add" %}<b>добавить</b>
+            {% elif row.status == "update" %}<b>обновить</b>
+            {% elif row.status == "unchanged" %}<span style="color:#447e9b;">без изменений</span>
+            {% else %}<span style="color:#ba2121;">ошибка</span>{% endif %}
+          </td>
+          <td style="border-bottom:1px solid #eee; padding:6px; color:#666;">{{ row.detail|default:"" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p style="margin-top:12px;">
+    Итого: <b>{{ summary.add }}</b> добавить, <b>{{ summary.update }}</b> обновить,
+    <b>{{ summary.unchanged }}</b> без изменений, <b>{{ summary.error }}</b> ошибок.
+  </p>
+
+  {% if error %}
+    <p style="color:#ba2121;">Импорт не может быть выполнен: {{ error }}</p>
+  {% else %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="file_path" value="{{ file_path }}">
+      <button type="submit" name="action" value="confirm" class="button" style="background:#417690;">
+        Применить импорт
+      </button>
+    </form>
+  {% endif %}
+{% endif %}
+
+<div style="margin-top:20px;">
+  <a href="{% url 'admin:index' %}">&larr; В админку</a>
+</div>
+{% endblock %}

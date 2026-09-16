@@ -1,0 +1,4 @@
+Django>=5.2,<6.0
+defusedxml>=0.7
+django-cors-headers>=4.0
+openpyxl>=3.1

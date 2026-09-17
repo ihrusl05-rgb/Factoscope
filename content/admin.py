@@ -7,6 +7,7 @@ import uuid
 from django.conf import settings
 from django.contrib import admin, messages
 from django.core.files.uploadedfile import UploadedFile
+from django.db import models
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import path, reverse
@@ -14,6 +15,7 @@ from django.utils import timezone
 
 from .models import ZODIAC_SIGNS, Fact, Horoscope, ImportLog, SiteSettings
 from .services import ContentImporter, ImportParseError
+from .widgets import CharCountTextarea
 
 IMPORT_TMP_ROOT = os.path.join(settings.MEDIA_ROOT, "import_tmp")
 
@@ -125,6 +127,7 @@ class HoroscopeAdmin(admin.ModelAdmin):
     list_per_page = 200
     actions = [make_active, make_inactive, accept_drafts, return_to_draft, shuffle_horooscopes_action]
     ordering = ("-date", "sign")
+    formfield_overrides = {models.TextField: {"widget": CharCountTextarea}}
 
     @admin.display(description="Текст")
     def text_short(self, obj):
@@ -140,6 +143,7 @@ class FactAdmin(admin.ModelAdmin):
     list_per_page = 200
     actions = [make_active, make_inactive, shuffle_facts_action]
     ordering = ("ordering", "id")
+    formfield_overrides = {models.TextField: {"widget": CharCountTextarea}}
 
     @admin.display(description="Текст")
     def text_short(self, obj):

@@ -282,6 +282,29 @@ class ApiTests(TestCase):
         r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16", "limit": 1})
         self.assertEqual(len(json.loads(r.content)["facts"]), 1)
 
+    def test_content_facts_only(self):
+        r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16", "content": "facts"})
+        data = json.loads(r.content)
+        self.assertNotIn("horoscope", data)
+        self.assertEqual(len(data["facts"]), 2)
+
+    def test_content_horoscopes_only(self):
+        r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16", "content": "horoscopes"})
+        data = json.loads(r.content)
+        self.assertNotIn("facts", data)
+        self.assertEqual(data["horoscope"]["text"], "Гороскоп Овна")
+
+    def test_content_horoscopes_all_signs(self):
+        Horoscope.objects.create(sign="taurus", date=date(2026, 9, 16), text="Телец")
+        r = self.client.get("/api/today", {"date": "2026-09-16", "content": "horoscopes"})
+        data = json.loads(r.content)
+        self.assertNotIn("facts", data)
+        self.assertEqual(len(data["horoscopes"]), 2)
+
+    def test_content_invalid_is_400(self):
+        r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16", "content": "qq"})
+        self.assertEqual(r.status_code, 400)
+
     def test_inactive_horoscope_hidden(self):
         Horoscope.objects.filter(sign="aries").update(is_active=False)
         r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16"})
@@ -357,6 +380,46 @@ class ApiTests(TestCase):
         r = self.client.get("/api/today", {"sign": "no-such", "date": "2026-09-16"})
         self.assertEqual(r.status_code, 400)
 
+    def test_horoscope_endpoint_with_sign(self):
+        r = self.client.get("/api/horoscope", {"sign": "aries", "date": "2026-09-16"})
+        self.assertEqual(r.status_code, 200)
+        data = json.loads(r.content)
+        self.assertEqual(data["horoscope"]["text"], "Гороскоп Овна")
+        self.assertNotIn("facts", data)
+        self.assertNotIn("horoscopes", data)
+
+    def test_horoscope_endpoint_all_signs(self):
+        Horoscope.objects.create(sign="taurus", date=date(2026, 9, 16), text="Телец")
+        r = self.client.get("/api/horoscope", {"date": "2026-09-16"})
+        data = json.loads(r.content)
+        self.assertNotIn("facts", data)
+        self.assertEqual({h["sign"] for h in data["horoscopes"]}, {"aries", "taurus"})
+
+    def test_horoscope_endpoint_unknown_sign_is_400(self):
+        r = self.client.get("/api/horoscope", {"sign": "no-such"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_facts_endpoint(self):
+        r = self.client.get("/api/facts", {"date": "2026-09-16", "limit": 1})
+        self.assertEqual(r.status_code, 200)
+        data = json.loads(r.content)
+        self.assertEqual(len(data["facts"]), 1)
+        self.assertNotIn("horoscope", data)
+        self.assertNotIn("horoscopes", data)
+
+    def test_facts_endpoint_xml(self):
+        r = self.client.get("/api/facts", {"date": "2026-09-16", "format": "xml"})
+        self.assertIn(b"<fact", r.content)
+        self.assertNotIn(b"<horoscope", r.content)
+
+    def test_horoscope_cache_invalidated_for_horoscopes_content(self):
+        self.client.get("/api/horoscope", {"sign": "aries", "date": "2026-09-16"})
+        h = Horoscope.objects.get(sign="aries", date="2026-09-16")
+        h.text = "Обновлённый текст"
+        h.save()
+        r = self.client.get("/api/horoscope", {"sign": "aries", "date": "2026-09-16"})
+        self.assertEqual(json.loads(r.content)["horoscope"]["text"], "Обновлённый текст")
+
     def test_cache_invalidated_on_horoscope_save(self):
         self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16"})
         h = Horoscope.objects.get(sign="aries", date="2026-09-16")
@@ -426,6 +489,13 @@ class AdminImportTests(TestCase):
         self.assertEqual(r.status_code, 302)
         h.refresh_from_db()
         self.assertTrue(h.is_draft)
+
+    def test_form_has_char_count_widget(self):
+        for name in ("content_horoscope_add", "content_fact_add"):
+            r = self.client.get(reverse(f"admin:{name}"))
+            self.assertEqual(r.status_code, 200)
+            self.assertContains(r, "data-charcount")
+            self.assertContains(r, "admin/js/char_counter.js")
 
     def test_shuffle_facts_action_reverses_order(self):
         from unittest.mock import patch

@@ -20,9 +20,9 @@ def _facts_version() -> int:
     return cache.get("api:facts_version", 1)
 
 
-def _payload_key(sign: str, day) -> str:
+def _payload_key(sign: str, day, content: str = "all") -> str:
     day_str = day.isoformat() if hasattr(day, "isoformat") else str(day)
-    return f"api:today:{CACHE_VERSION}:v{_facts_version()}:{sign or 'all'}:{day_str}"
+    return f"api:today:{CACHE_VERSION}:v{_facts_version()}:{content}:{sign or 'all'}:{day_str}"
 
 
 def _flags() -> dict:
@@ -34,8 +34,11 @@ def _flags() -> dict:
     return flags
 
 
-def build_daily_payload(sign: str | None, day: date) -> dict:
+def build_daily_payload(sign: str | None, day: date, content: str = "all") -> dict:
     """Пакет для экрана. sign=None — все активные знаки на дату.
+
+    content: "all" (факты+гороскоп), "facts" (только факты),
+             "horoscopes" (только гороскопы).
 
     Случайный порядок (факты и список знаков) применяется здесь, поэтому при
     включённых флагах результат не берётся из кэша.
@@ -44,13 +47,17 @@ def build_daily_payload(sign: str | None, day: date) -> dict:
     payload = {
         "date": day.isoformat(),
         "sign": sign,
-        "facts": [
+    }
+    if content != "horoscopes":
+        payload["facts"] = [
             {"text": f.text, "category": f.category}
             for f in Fact.objects.filter(is_active=True).order_by("ordering", "id")
-        ],
-    }
-    if flags["shuffle_facts"]:
-        random.shuffle(payload["facts"])
+        ]
+        if flags["shuffle_facts"]:
+            random.shuffle(payload["facts"])
+
+    if content == "facts":
+        return payload
 
     if sign:
         horizon = (
@@ -65,7 +72,7 @@ def build_daily_payload(sign: str | None, day: date) -> dict:
             if horizon
             else None
         )
-        payload.pop("horooscopes", None)
+        payload.pop("horoscopes", None)
     else:
         rows = list(
             Horoscope.objects.filter(date=day, is_active=True, is_draft=False)
@@ -82,7 +89,12 @@ def build_daily_payload(sign: str | None, day: date) -> dict:
     return payload
 
 
-def get_daily_payload(sign: str | None, day: date, limit: int = FACT_LIMIT_DEFAULT) -> dict:
+def get_daily_payload(
+    sign: str | None,
+    day: date,
+    limit: int = FACT_LIMIT_DEFAULT,
+    content: str = "all",
+) -> dict:
     """Пакет, обрезанный до `limit` фактов.
 
     Если включён случайный режим — каждый запрос отдаёт новый порядок/выборку
@@ -90,17 +102,21 @@ def get_daily_payload(sign: str | None, day: date, limit: int = FACT_LIMIT_DEFAU
     """
     flags = _flags()
     random_mode = (
-        flags["shuffle_facts"] or (sign is None and flags["shuffle_horoscopes"])
+        (flags["shuffle_facts"] and content != "horoscopes")
+        or (sign is None and flags["shuffle_horoscopes"] and content != "facts")
     )
     if random_mode:
-        payload = build_daily_payload(sign, day)
+        payload = build_daily_payload(sign, day, content)
     else:
-        payload = cache.get(_payload_key(sign, day))
+        payload = cache.get(_payload_key(sign, day, content))
         if payload is None:
-            payload = build_daily_payload(sign, day)
-            cache.set(_payload_key(sign, day), payload, timeout=PAYLOAD_TTL)
+            payload = build_daily_payload(sign, day, content)
+            cache.set(_payload_key(sign, day, content), payload, timeout=PAYLOAD_TTL)
 
-    facts = payload["facts"]
+    facts = payload.get("facts")
+    if facts is None:
+        return payload
+    facts = list(facts)
     if flags["shuffle_facts"]:
         if limit < len(facts):
             facts = random.sample(facts, limit)
@@ -115,8 +131,10 @@ def get_etag(payload: dict) -> str:
 
 
 def invalidate_horoscope(sign: str, day: date) -> None:
-    cache.delete(_payload_key(sign, day))
-    cache.delete(_payload_key(None, day))
+    """Сбрасывает все варианты кэша, где может быть гороскоп."""
+    for content in ("all", "horoscopes"):
+        cache.delete(_payload_key(sign, day, content))
+        cache.delete(_payload_key(None, day, content))
 
 
 def invalidate_facts() -> None:

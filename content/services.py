@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -96,6 +97,32 @@ _DATE_ALIASES = {"date", "дата", "день", "число"}
 _SIGN_ALIASES = {"sign", "знак", "знак зодиака", "зодиак", "name", "имя"}
 _TEXT_ALIASES = {"forecast", "text", "текст", "предсказание", "прогноз", "описание"}
 _ADVICE_ALIASES = {"advice", "совет", "рекомендация"}
+_RUSSIAN_MONTHS = {
+    "январь": 1,
+    "января": 1,
+    "февраль": 2,
+    "февраля": 2,
+    "март": 3,
+    "марта": 3,
+    "апрель": 4,
+    "апреля": 4,
+    "май": 5,
+    "мая": 5,
+    "июнь": 6,
+    "июня": 6,
+    "июль": 7,
+    "июля": 7,
+    "август": 8,
+    "августа": 8,
+    "сентябрь": 9,
+    "сентября": 9,
+    "октябрь": 10,
+    "октября": 10,
+    "ноябрь": 11,
+    "ноября": 11,
+    "декабрь": 12,
+    "декабря": 12,
+}
 
 
 def _norm_col(value) -> str:
@@ -130,14 +157,38 @@ def _combine_text(*parts) -> str:
     return "\n\n".join(vals)
 
 
+def _parse_header_date(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    text = _norm_col(value)
+    numeric = re.search(r"(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4})(?!\d)", text)
+    if numeric:
+        try:
+            return date(int(numeric.group(3)), int(numeric.group(2)), int(numeric.group(1)))
+        except ValueError:
+            return None
+
+    words = re.search(r"(?<!\d)(\d{1,2})\s+([а-яё]+)\s+(\d{4})(?!\d)", text)
+    if not words:
+        return None
+    month = _RUSSIAN_MONTHS.get(words.group(2))
+    if month is None:
+        return None
+    try:
+        return date(int(words.group(3)), month, int(words.group(1)))
+    except ValueError:
+        return None
+
+
 def _table_to_horoscopes(rows, *, source_name: str) -> list[dict]:
     """Разбирает таблицу в двух форматах:
 
     Длинный:  date | sign | forecast | advice
     Широкий:  знак зодиака | период | Гороскоп на DD.MM.YYYY | ...
     """
-    import re
-
     it = iter(rows)
     header = next(it, None)
     cols = _resolve_columns(header)
@@ -160,13 +211,9 @@ def _table_to_horoscopes(rows, *, source_name: str) -> list[dict]:
     date_cols: list[tuple[int, date]] = []
     if header:
         for i, h in enumerate(header):
-            m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", str(h or ""))
-            if m:
-                try:
-                    dt = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
-                    date_cols.append((i, dt))
-                except ValueError:
-                    pass
+            dt = _parse_header_date(h)
+            if dt is not None:
+                date_cols.append((i, dt))
 
     if not date_cols:
         raise ImportParseError(

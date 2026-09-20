@@ -178,6 +178,43 @@ class ImportServiceTests(TestCase):
         self.assertEqual(Horoscope.objects.get(sign="taurus", date="2026-09-16").text, "Текст Тельца 16-го.")
         self.assertFalse(Horoscope.objects.filter(sign="taurus", date="2026-09-17").exists())
 
+    def test_xlsx_wide_format_with_russian_date_headers(self):
+        """Широкая таблица принимает даты с русскими названиями месяцев."""
+        from io import BytesIO
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Знак зодиака", "20 сентября 2026", "Гороскоп на 21 сентября 2026"])
+        ws.append(["Овен", "Текст Овна 20-го.", "Текст Овна 21-го."])
+        buf = BytesIO()
+        wb.save(buf)
+
+        importer = ContentImporter(buf.getvalue(), "xlsx")
+
+        self.assertEqual(len(importer.horoscopes), 2)
+        self.assertEqual(importer.horoscopes[0]["date"], date(2026, 9, 20))
+        self.assertEqual(importer.horoscopes[1]["date"], date(2026, 9, 21))
+
+    def test_xlsx_wide_format_with_excel_date_header(self):
+        """Широкая таблица принимает настоящую Excel-дату в ячейке шапки."""
+        from io import BytesIO
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Знак зодиака", date(2026, 9, 20)])
+        ws.append(["Овен", "Текст Овна."])
+        buf = BytesIO()
+        wb.save(buf)
+
+        importer = ContentImporter(buf.getvalue(), "xlsx")
+
+        self.assertEqual(len(importer.horoscopes), 1)
+        self.assertEqual(importer.horoscopes[0]["date"], date(2026, 9, 20))
+
     def test_xlsx_missing_advice_column_ok(self):
         body = _xlsx_body([("2026-09-16", "Близнецы", "Текст близнецов")])
         # переписываем шапку без advice

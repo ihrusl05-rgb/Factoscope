@@ -1,12 +1,14 @@
 import json
 from datetime import date
+from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Fact, Horoscope, ImportLog, SiteSettings
+from .models import ZODIAC_SIGNS, Fact, Horoscope, ImportLog, SiteSettings
 from .services import ContentImporter
 
 JSON_BODY = """{
@@ -275,8 +277,17 @@ class ApiTests(TestCase):
         data = json.loads(r.content)
         self.assertEqual(data["sign"], "aries")
         self.assertEqual(data["horoscope"]["text"], "Гороскоп Овна")
+        self.assertEqual(
+            data["horoscope"]["image_url"],
+            "http://testserver/static/content/zodiac/aries.svg",
+        )
         self.assertEqual(len(data["facts"]), 2)
         self.assertTrue(r["ETag"])
+
+    def test_all_zodiac_images_exist(self):
+        image_root = Path(settings.BASE_DIR) / "content" / "static" / "content" / "zodiac"
+        for sign, _label in ZODIAC_SIGNS:
+            self.assertTrue((image_root / f"{sign}.svg").is_file(), sign)
 
     def test_fact_limit(self):
         r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16", "limit": 1})
@@ -327,6 +338,7 @@ class ApiTests(TestCase):
         r = self.client.get("/api/today", {"sign": "aries", "date": "2026-09-16", "format": "xml"})
         self.assertEqual(r.status_code, 200)
         self.assertIn(b"<horoscope", r.content)
+        self.assertIn(b'image_url="http://testserver/static/content/zodiac/aries.svg"', r.content)
         self.assertIn(b"<daily", r.content)
 
     def test_etag_304(self):
@@ -496,6 +508,39 @@ class AdminImportTests(TestCase):
             self.assertEqual(r.status_code, 200)
             self.assertContains(r, "data-charcount")
             self.assertContains(r, "admin/js/char_counter.js")
+
+    def test_fact_list_shows_character_count_after_text(self):
+        fact = Fact.objects.create(text="Факт из 16 знаков", category="science")
+        r = self.client.get(reverse("admin:content_fact_changelist"))
+
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, '<th scope="col" class="column-character_count">', html=False)
+        self.assertContains(r, "Символов")
+        self.assertContains(
+            r,
+            f'<td class="field-character_count">{len(fact.text)}</td>',
+            html=False,
+        )
+        self.assertLess(r.content.index(b"column-text_short"), r.content.index(b"column-character_count"))
+        self.assertLess(r.content.index(b"column-character_count"), r.content.index(b"column-category"))
+
+    def test_horoscope_list_shows_character_count_after_text(self):
+        horoscope = Horoscope.objects.create(
+            sign="aries",
+            date="2026-09-18",
+            text="Прогноз для Овна",
+        )
+        r = self.client.get(reverse("admin:content_horoscope_changelist"))
+
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Символов")
+        self.assertContains(
+            r,
+            f'<td class="field-character_count">{len(horoscope.text)}</td>',
+            html=False,
+        )
+        self.assertLess(r.content.index(b"column-text_short"), r.content.index(b"column-character_count"))
+        self.assertLess(r.content.index(b"column-character_count"), r.content.index(b"column-is_draft"))
 
     def test_shuffle_facts_action_reverses_order(self):
         from unittest.mock import patch

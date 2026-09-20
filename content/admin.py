@@ -119,7 +119,7 @@ def return_to_draft(modeladmin, request, queryset):
 
 @admin.register(Horoscope)
 class HoroscopeAdmin(admin.ModelAdmin):
-    list_display = ("date", "sign", "text_short", "is_draft", "is_active")
+    list_display = ("date", "sign", "text_short", "character_count", "is_draft", "is_active")
     list_editable = ("is_active",)
     list_filter = ("sign", "is_active", "is_draft", "date")
     search_fields = ("text",)
@@ -133,10 +133,14 @@ class HoroscopeAdmin(admin.ModelAdmin):
     def text_short(self, obj):
         return obj.text[:70]
 
+    @admin.display(description="Символов")
+    def character_count(self, obj):
+        return len(obj.text)
+
 
 @admin.register(Fact)
 class FactAdmin(admin.ModelAdmin):
-    list_display = ("text_short", "category", "ordering", "is_active")
+    list_display = ("text_short", "character_count", "category", "ordering", "is_active")
     list_editable = ("ordering", "is_active")
     list_filter = ("category", "is_active")
     search_fields = ("text",)
@@ -148,6 +152,10 @@ class FactAdmin(admin.ModelAdmin):
     @admin.display(description="Текст")
     def text_short(self, obj):
         return obj.text[:70]
+
+    @admin.display(description="Символов")
+    def character_count(self, obj):
+        return len(obj.text)
 
 
 @admin.register(ImportLog)

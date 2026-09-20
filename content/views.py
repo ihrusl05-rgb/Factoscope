@@ -7,6 +7,7 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from django.http import HttpResponse, JsonResponse
+from django.templatetags.static import static
 from django.utils import timezone
 from django.views import View
 
@@ -14,6 +15,23 @@ from .api import get_daily_payload, get_etag
 from .models import FACT_LIMIT_DEFAULT, normalize_sign
 
 MAX_FACT_LIMIT = 100
+
+
+def _horoscope_with_image(request, horoscope: dict) -> dict:
+    image_path = static(f"content/zodiac/{horoscope['sign']}.svg")
+    return {**horoscope, "image_url": request.build_absolute_uri(image_path)}
+
+
+def _add_horoscope_images(request, payload: dict) -> dict:
+    result = {**payload}
+    if result.get("horoscope") is not None:
+        result["horoscope"] = _horoscope_with_image(request, result["horoscope"])
+    if "horoscopes" in result:
+        result["horoscopes"] = [
+            _horoscope_with_image(request, horoscope)
+            for horoscope in result["horoscopes"]
+        ]
+    return result
 
 
 def _payload_to_xml(payload: dict) -> str:
@@ -27,12 +45,14 @@ def _payload_to_xml(payload: dict) -> str:
             el = ET.SubElement(root, "horoscope")
             el.set("date", horizon["date"])
             el.set("sign", horizon["sign"])
+            el.set("image_url", horizon["image_url"])
             el.text = escape(horizon["text"] or "")
     elif "horoscopes" in payload:
         for horizon in payload["horoscopes"]:
             el = ET.SubElement(root, "horoscope")
             el.set("date", horizon["date"])
             el.set("sign", horizon["sign"])
+            el.set("image_url", horizon["image_url"])
             el.text = escape(horizon["text"] or "")
     for fact in payload.get("facts", []):
         el = ET.SubElement(root, "fact")
@@ -81,6 +101,7 @@ def _get_limit(request) -> int:
 
 
 def _render(request, payload: dict) -> HttpResponse:
+    payload = _add_horoscope_images(request, payload)
     fmt = (request.GET.get("format") or "json").lower()
     etag = get_etag(payload)
 

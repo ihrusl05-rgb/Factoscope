@@ -1,3 +1,5 @@
+"""Модели данных: гороскопы, факты и настройки показа для API."""
+
 from django.db import models
 
 FACT_LIMIT_DEFAULT = 5
@@ -46,11 +48,20 @@ SIGN_ALIASES = {
 
 
 def normalize_sign(value: str) -> str | None:
-    """Приводит значение знака к коду модели, учитывая латиницу и кириллицу."""
+    """Приводит значение знака к коду модели.
+
+    Args:
+        value: Значение в латинице или кириллице (например, «Овен» или ``aries``).
+
+    Returns:
+        Код знака из ``ZODIAC_SIGNS`` или ``None``, если значение не распознано.
+    """
     return SIGN_ALIASES.get((value or "").strip().lower())
 
 
 class Horoscope(models.Model):
+    """Ежедневный гороскоп одного знака на конкретную дату."""
+
     sign = models.CharField("Знак зодиака", max_length=16, choices=ZODIAC_SIGNS, db_index=True)
     date = models.DateField("Дата", db_index=True)
     text = models.TextField("Текст")
@@ -72,6 +83,8 @@ class Horoscope(models.Model):
 
 
 class Fact(models.Model):
+    """Интересный факт для показа на экране."""
+
     text = models.TextField("Текст")
     category = models.CharField("Категория", max_length=64, blank=True, db_index=True)
     ordering = models.PositiveIntegerField("Порядок", default=0)
@@ -111,11 +124,18 @@ class SiteSettings(models.Model):
 
     @classmethod
     def load(cls) -> "SiteSettings":
+        """Возвращает единственную запись настроек, создавая её при необходимости.
+
+        Returns:
+            Объект :class:`SiteSettings` с ``pk=1``.
+        """
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 
 
 class ImportLog(models.Model):
+    """Журнал импорта контента."""
+
     class Status(models.TextChoices):
         SUCCESS = "success", "Успех"
         PARTIAL = "partial", "Частично"

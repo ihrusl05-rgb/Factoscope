@@ -1,4 +1,4 @@
-"""Дженерик-админка: CRUD, вкл/выкл, импорт контента (XML/JSON)."""
+"""Дженерик-админка: CRUD, вкл/выкл, импорт контента (XML/JSON/Excel)."""
 
 import os
 import random
@@ -27,6 +27,16 @@ ZODIAC_SIGN_LABELS = dict(ZODIAC_SIGNS)
 # ---------------------------------------------------------------------------
 
 def _toggle_active(modeladmin, request, queryset, value: bool):
+    """Включает/выключает показ для выбранных записей.
+
+    Сбрасывает кэш API для затронутых гороскопов или фактов.
+
+    Args:
+        modeladmin: Класс ModelAdmin, вызвавший действие.
+        request: HTTP-запрос.
+        queryset: Выбранные записи.
+        value: ``True`` — показывать, ``False`` — скрыть.
+    """
     if queryset.model is Horoscope:
         from .api import invalidate_horoscope
 
@@ -52,12 +62,23 @@ def make_inactive(modeladmin, request, queryset):
 
 
 def _shuffle(seq):
+    """Перемешивает список на месте (обёртка над ``random.shuffle``).
+
+    Args:
+        seq: Изменяемая последовательность.
+    """
     random.shuffle(seq)
 
 
 @admin.action(description="Перемешать порядок фактов (случайно)")
 def shuffle_facts_action(modeladmin, request, queryset):
-    """Разбрасывает `ordering` — следующий показ пойдёт в случайном порядке."""
+    """Разбрасывает ``ordering`` выбранных фактов.
+
+    Args:
+        modeladmin: Класс ModelAdmin, вызвавший действие.
+        request: HTTP-запрос.
+        queryset: Выбранные записи факторов.
+    """
     from .api import invalidate_facts
 
     ids = list(queryset.order_by("id").values_list("id", flat=True))
@@ -71,7 +92,13 @@ def shuffle_facts_action(modeladmin, request, queryset):
 
 @admin.action(description="Перемешать тексты между знаками (случайно)")
 def shuffle_horooscopes_action(modeladmin, request, queryset):
-    """Перемешивает тексты гороскопов внутри каждой даты выбранных знаков."""
+    """Перемешивает тексты гороскопов внутри дат выбранных знаков.
+
+    Args:
+        modeladmin: Класс ModelAdmin, вызвавший действие.
+        request: HTTP-запрос.
+        queryset: Выбранные гороскопы.
+    """
     from .api import invalidate_horoscope
 
     groups: dict = {}
@@ -93,6 +120,13 @@ def shuffle_horooscopes_action(modeladmin, request, queryset):
 
 @admin.action(description="Принять из черновика (проверено)")
 def accept_drafts(modeladmin, request, queryset):
+    """Снимает флаг черновика с выбранных гороскопов.
+
+    Args:
+        modeladmin: Класс ModelAdmin, вызвавший действие.
+        request: HTTP-запрос.
+        queryset: Выбранные гороскопы.
+    """
     from .api import invalidate_horoscope
 
     updated = 0
@@ -105,6 +139,13 @@ def accept_drafts(modeladmin, request, queryset):
 
 @admin.action(description="Вернуть в черновик")
 def return_to_draft(modeladmin, request, queryset):
+    """Устанавливает флаг черновика для выбранных гороскопов.
+
+    Args:
+        modeladmin: Класс ModelAdmin, вызвавший действие.
+        request: HTTP-запрос.
+        queryset: Выбранные гороскопы.
+    """
     from .api import invalidate_horoscope
 
     updated = queryset.update(is_draft=True)
@@ -195,6 +236,14 @@ class SiteSettingsAdmin(admin.ModelAdmin):
 # ---------------------------------------------------------------------------
 
 def _save_tmp_file(upload: UploadedFile) -> str:
+    """Сохраняет загруженный файл во временную папку импорта.
+
+    Args:
+        upload: Загруженный файл из ``request.FILES``.
+
+    Returns:
+        Абсолютный путь к сохранённому файлу.
+    """
     os.makedirs(IMPORT_TMP_ROOT, exist_ok=True)
     base, ext = os.path.splitext(upload.name or "")
     name = f"{uuid.uuid4().hex}{ext or '.dat'}"
@@ -206,12 +255,21 @@ def _save_tmp_file(upload: UploadedFile) -> str:
 
 
 def _format_from_path(path: str) -> str | None:
+    """Определяет формат импорта по расширению файла.
+
+    Args:
+        path: Путь к файлу.
+
+    Returns:
+        ``"json"``, ``"xml"``, ``"xlsx"``, ``"csv"`` или ``None``.
+    """
     return {"xml": "xml", "json": "json", "xlsx": "xlsx", "csv": "csv"}.get(
         os.path.splitext(path)[1].strip(".").lower()
     )
 
 
 def _cleanup_tmp() -> None:
+    """Удаляет временные файлы импорта старше одного часа."""
     if not os.path.isdir(IMPORT_TMP_ROOT):
         return
     for name in os.listdir(IMPORT_TMP_ROOT):
@@ -224,6 +282,15 @@ def _cleanup_tmp() -> None:
 
 
 def import_content_view(request):
+    """Страница импорта контента: предпросмотр и подтверждение загрузки.
+
+    Args:
+        request: HTTP-запрос. POST с ``action=preview`` разбирает файл и
+            показывает разницу с базой; ``action=confirm`` применяет импорт.
+
+    Returns:
+        ``HttpResponse`` с формой/предпросмотром импорта.
+    """
     context = {
         "title": "Импорт контента",
         "preview": None,
@@ -302,7 +369,14 @@ _original_get_app_list = admin.site.get_app_list
 
 
 def _patched_get_app_list(request):
-    """Вставка ссылки «Импорт контента» в раздел «content» индекса."""
+    """Вставляет ссылку «Импорт контента» в раздел «content» индекса админки.
+
+    Args:
+        request: HTTP-запрос.
+
+    Returns:
+        Обновлённый список приложений админки.
+    """
     app_list = _original_get_app_list(request)
     for app in app_list:
         if app["app_label"] == "content":

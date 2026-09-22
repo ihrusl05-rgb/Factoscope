@@ -89,6 +89,25 @@ class ImportServiceTests(TestCase):
             "Новый текст Овна",
         )
 
+    def test_json_accepts_singular_horoscope_and_prediction_fields(self):
+        body = """{
+          "date": "2026-09-21",
+          "horoscope": [
+            {"sign": "Овен", "prediction": "Отдыхайте.", "advice": "Не спешите."},
+            {"sign": "Стрелец", "text": "Просто текст."}
+          ],
+          "facts": []
+        }""".encode("utf-8")
+        importer = ContentImporter(body, "json")
+        self.assertEqual(importer.preview_summary()["add"], 2)
+        result = importer.commit()
+        self.assertEqual(result.added, 2)
+        h = Horoscope.objects.get(date="2026-09-21", sign="sagittarius")
+        self.assertEqual(h.text, "Просто текст.")
+        h2 = Horoscope.objects.get(date="2026-09-21", sign="aries")
+        self.assertIn("Отдыхайте.", h2.text)
+        self.assertIn("Не спешите.", h2.text)
+
     def test_import_errors_for_bad_records(self):
         body = """{
           "horoscopes": [

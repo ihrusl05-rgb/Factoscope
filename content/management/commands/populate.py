@@ -24,6 +24,11 @@ class Command(BaseCommand):
     help = "Импорт гороскопов и фактов из XML/JSON/Excel/CSV-файла"
 
     def add_arguments(self, parser):
+        """Задаёт аргументы командной строки.
+
+        Args:
+            parser: Парсер аргументов команды.
+        """
         parser.add_argument("path", help="Путь к файлу (.json/.xml/.xlsx/.csv)")
         parser.add_argument(
             "--format",
@@ -38,6 +43,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        """Показывает разницу файла с базой и применяет импорт."""
         path = options["path"]
         fmt = options["format"]
         if fmt is None:

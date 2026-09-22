@@ -18,11 +18,29 @@ MAX_FACT_LIMIT = 100
 
 
 def _horoscope_with_image(request, horoscope: dict) -> dict:
+    """Добавляет к гороскопу абсолютный URL картинки знака.
+
+    Args:
+        request: HTTP-запрос (для построения абсолютного URL).
+        horoscope: Запись гороскопа (``{"text", "sign", "date"}``).
+
+    Returns:
+        Копия записи с ключом ``image_url``.
+    """
     image_path = static(f"content/zodiac/{horoscope['sign']}.svg")
     return {**horoscope, "image_url": request.build_absolute_uri(image_path)}
 
 
 def _add_horoscope_images(request, payload: dict) -> dict:
+    """Добавляет ``image_url`` всем гороскопам в пакете.
+
+    Args:
+        request: HTTP-запрос.
+        payload: Словарь-пакет.
+
+    Returns:
+        Копия пакета с полем ``image_url`` у гороскопов.
+    """
     result = {**payload}
     if result.get("horoscope") is not None:
         result["horoscope"] = _horoscope_with_image(request, result["horoscope"])
@@ -35,6 +53,15 @@ def _add_horoscope_images(request, payload: dict) -> dict:
 
 
 def _payload_to_xml(payload: dict) -> str:
+    """Преобразует пакет дня в XML-документ.
+
+    Args:
+        payload: Словарь-пакет (см. ``content.api.build_daily_payload``).
+
+    Returns:
+        XML-строка с корнем ``<daily>`` и элементами
+        ``<horoscope>``/``<fact>``.
+    """
     root = ET.Element(
         "daily",
         {"date": payload["date"], "sign": payload["sign"] or ""},
@@ -63,6 +90,14 @@ def _payload_to_xml(payload: dict) -> str:
 
 
 def _parse_date(value: str) -> date | None:
+    """Разбирает дату в формате ISO-8601.
+
+    Args:
+        value: Строка ``YYYY-MM-DD``.
+
+    Returns:
+        :class:`~datetime.date` или ``None`` при неверном формате.
+    """
     try:
         return date.fromisoformat(value)
     except (ValueError, TypeError):
@@ -70,12 +105,29 @@ def _parse_date(value: str) -> date | None:
 
 
 def _error(message: str) -> HttpResponse:
+    """Возвращает ответ с ошибкой.
+
+    Args:
+        message: Текст ошибки.
+
+    Returns:
+        ``HttpResponse`` со статусом 400 и сообщением в JSON.
+    """
     return HttpResponse(
         '{"error": "%s"}' % message, content_type="application/json", status=400
     )
 
 
 def _get_sign(request) -> tuple[str | None, HttpResponse | None]:
+    """Извлекает и проверяет параметр ``sign`` из запроса.
+
+    Args:
+        request: HTTP-запрос.
+
+    Returns:
+        Кортеж ``(sign, error)``. ``sign`` — код знака или ``None``,
+        ``error`` — ответ с ошибкой, если знак не распознан.
+    """
     raw_sign = request.GET.get("sign", "").strip()
     if not raw_sign:
         return None, None
@@ -86,6 +138,14 @@ def _get_sign(request) -> tuple[str | None, HttpResponse | None]:
 
 
 def _get_day(request) -> tuple[date | None, HttpResponse | None]:
+    """Извлекает и проверяет параметр ``date`` из запроса.
+
+    Args:
+        request: HTTP-запрос. Если ``date`` не передан — берётся текущий день.
+
+    Returns:
+        Кортеж ``(day, error)``. ``error`` — ответ с ошибкой при неверном формате.
+    """
     raw_date = request.GET.get("date") or timezone.localdate().isoformat()
     day = _parse_date(raw_date)
     if day is None:
@@ -94,6 +154,15 @@ def _get_day(request) -> tuple[date | None, HttpResponse | None]:
 
 
 def _get_limit(request) -> int:
+    """Извлекает параметр ``limit`` из запроса.
+
+    Args:
+        request: HTTP-запрос.
+
+    Returns:
+        Число фактов от 0 до ``MAX_FACT_LIMIT``; при неверном значении —
+        значение по умолчанию ``FACT_LIMIT_DEFAULT``.
+    """
     try:
         return max(0, min(MAX_FACT_LIMIT, int(request.GET.get("limit", FACT_LIMIT_DEFAULT))))
     except (TypeError, ValueError):
@@ -101,6 +170,18 @@ def _get_limit(request) -> int:
 
 
 def _render(request, payload: dict) -> HttpResponse:
+    """Формирует HTTP-ответ по пакету: JSON или XML + ETag.
+
+    Поддерживает условные запросы: при совпадении ``If-None-Match``
+    возвращает ответ со статусом 304.
+
+    Args:
+        request: HTTP-запрос.
+        payload: Словарь-пакет.
+
+    Returns:
+        ``HttpResponse`` с JSON или XML и заголовком ``ETag``.
+    """
     payload = _add_horoscope_images(request, payload)
     fmt = (request.GET.get("format") or "json").lower()
     etag = get_etag(payload)
@@ -121,16 +202,29 @@ def _render(request, payload: dict) -> HttpResponse:
 
 
 class TodayAPIView(View):
-    """GET /api/today?sign=aries&date=2026-09-16&limit=5&format=json|xml
+    """GET /api/today: совмещённый пакет (факты + гороскопы).
 
-    Совмещённый пакет: факты + гороскоп(ы). content=all (по умолчанию) | facts |
-    horoscopes — вернуть только часть. Без `sign` возвращает все активные знаки
-    на дату (в случайном порядке, если включён тумблер в админке).
+    Параметры запроса (HTTP GET):
 
-    Для раздельной выдачи используйте /api/horoscope и /api/facts.
+    - ``sign``: код знака (например, ``aries``); без него — все знаки на дату.
+    - ``date``: ``YYYY-MM-DD``; по умолчанию — текущий день.
+    - ``limit``: максимум фактов в ответе.
+    - ``content``: ``all`` (по умолчанию), ``facts`` или ``horoscopes``.
+    - ``format``: ``json`` (по умолчанию) или ``xml``.
+
+    Для раздельной выдачи используйте :class:`HoroscopeAPIView`
+    и :class:`FactsAPIView`.
     """
 
     def get(self, request):
+        """Обрабатывает GET-запрос.
+
+        Args:
+            request: HTTP-запрос.
+
+        Returns:
+            ``HttpResponse`` с пакетом дня или ошибкой 400.
+        """
         sign, err = _get_sign(request)
         if err:
             return err
@@ -147,13 +241,26 @@ class TodayAPIView(View):
 
 
 class HoroscopeAPIView(View):
-    """GET /api/horoscope?sign=aries&date=2026-09-16&format=json|xml
+    """GET /api/horoscope: только гороскопы.
 
-    Со `sign` — гороскоп этого знака (`horoscope`, может быть null).
-    Без `sign` — все активные знаки на дату (`horoscopes`).
+    Параметры запроса:
+
+    - ``sign``: код знака — вернёт ``horoscope`` (может быть ``null``).
+    - ``date``: ``YYYY-MM-DD``; по умолчанию — текущий день.
+    - ``format``: ``json`` (по умолчанию) или ``xml``.
+
+    Без ``sign`` возвращает все активные знаки на дату в ``horoscopes``.
     """
 
     def get(self, request):
+        """Обрабатывает GET-запрос.
+
+        Args:
+            request: HTTP-запрос.
+
+        Returns:
+            ``HttpResponse`` с гороскопом(ами) или ошибкой 400.
+        """
         sign, err = _get_sign(request)
         if err:
             return err
@@ -166,12 +273,24 @@ class HoroscopeAPIView(View):
 
 
 class FactsAPIView(View):
-    """GET /api/facts?date=2026-09-16&limit=5&format=json|xml
+    """GET /api/facts: только факты.
 
-    Только факты (общие на день, без привязки к знаку).
+    Параметры запроса:
+
+    - ``date``: ``YYYY-MM-DD``; по умолчанию — текущий день.
+    - ``limit``: максимум фактов в ответе.
+    - ``format``: ``json`` (по умолчанию) или ``xml``.
     """
 
     def get(self, request):
+        """Обрабатывает GET-запрос.
+
+        Args:
+            request: HTTP-запрос.
+
+        Returns:
+            ``HttpResponse`` с фактами или ошибкой 400.
+        """
         day, err = _get_day(request)
         if err:
             return err

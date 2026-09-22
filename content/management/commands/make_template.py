@@ -42,6 +42,15 @@ _RULES = {
 
 
 def _month_days(year: int, month: int) -> int:
+    """Возвращает количество дней в месяце.
+
+    Args:
+        year: Год.
+        month: Месяц (1–12).
+
+    Returns:
+        Число дней в указанном месяце.
+    """
     return monthrange(year, month)[1]
 
 
@@ -49,10 +58,16 @@ class Command(BaseCommand):
     help = "Генерация Excel-шаблона гороскопов для копирайтера"
 
     def add_arguments(self, parser):
+        """Задаёт аргументы командной строки.
+
+        Args:
+            parser: Парсер аргументов команды.
+        """
         parser.add_argument("--month", help="Месяц в формате ГГГГ-ММ (по умолчанию — следующий)")
         parser.add_argument("output", nargs="?", help="Путь к файлу (по умолчанию horoscope_ГГГГ-ММ.xlsx)")
 
     def handle(self, *args, **options):
+        """Создаёт Excel-шаблон гороскопов и сохраняет его на диск."""
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font
         from openpyxl.utils import get_column_letter

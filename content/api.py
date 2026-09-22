@@ -21,11 +21,26 @@ def _facts_version() -> int:
 
 
 def _payload_key(sign: str, day, content: str = "all") -> str:
+    """Формирует ключ кэша для пакета дня.
+
+    Args:
+        sign: Код знака зодиака или ``None`` (все знаки).
+        day: Дата в виде :class:`~datetime.date` или ISO-строки.
+        content: Вариант контента: ``all``, ``facts`` или ``horoscopes``.
+
+    Returns:
+        Строка-ключ для Django cache.
+    """
     day_str = day.isoformat() if hasattr(day, "isoformat") else str(day)
     return f"api:today:{CACHE_VERSION}:v{_facts_version()}:{content}:{sign or 'all'}:{day_str}"
 
 
 def _flags() -> dict:
+    """Возвращает текущие тумблеры показа с кэшированием на 30 секунд.
+
+    Returns:
+        Словарь ``{"shuffle_facts": bool, "shuffle_horoscopes": bool}``.
+    """
     flags = cache.get("api:site_flags")
     if flags is None:
         s = SiteSettings.load()
@@ -35,13 +50,20 @@ def _flags() -> dict:
 
 
 def build_daily_payload(sign: str | None, day: date, content: str = "all") -> dict:
-    """Пакет для экрана. sign=None — все активные знаки на дату.
+    """Собирает «пакет на день» для экрана.
 
-    content: "all" (факты+гороскоп), "facts" (только факты),
-             "horoscopes" (только гороскопы).
+    Факты и список знаков перемешиваются здесь, поэтому при включённых
+    тумблерах `shuffle_facts`/`shuffle_horoscopes` результат не берётся
+    из кэша.
 
-    Случайный порядок (факты и список знаков) применяется здесь, поэтому при
-    включённых флагах результат не берётся из кэша.
+    Args:
+        sign: Код знака или ``None`` — тогда возвращаются все активные знаки.
+        day: Дата дня.
+        content: Вариант контента: ``all``, ``facts`` или ``horoscopes``.
+
+    Returns:
+        Словарь с ключами ``date``, ``sign`` и ``facts``/``horoscope``
+        (или ``horoscopes``) в зависимости от ``content``.
     """
     flags = _flags()
     payload = {
@@ -95,10 +117,19 @@ def get_daily_payload(
     limit: int = FACT_LIMIT_DEFAULT,
     content: str = "all",
 ) -> dict:
-    """Пакет, обрезанный до `limit` фактов.
+    """Возвращает пакет дня, обрезанный до ``limit`` фактов.
 
-    Если включён случайный режим — каждый запрос отдаёт новый порядок/выборку
-    (лимит фактов применяется к перемешанному списку, а не к кэшу).
+    Если включён случайный режим — каждый запрос отдаёт новый порядок или
+    выборку (лимит применяется к перемешанному списку, а не к кэшу).
+
+    Args:
+        sign: Код знака или ``None`` (все знаки на дату).
+        day: Дата дня.
+        limit: Максимальное количество фактов.
+        content: Вариант контента: ``all``, ``facts`` или ``horoscopes``.
+
+    Returns:
+        Словарь-пакет (см. ``build_daily_payload``).
     """
     flags = _flags()
     random_mode = (
@@ -126,12 +157,25 @@ def get_daily_payload(
 
 
 def get_etag(payload: dict) -> str:
+    """Вычисляет ETag для пакета.
+
+    Args:
+        payload: Словарь-пакет.
+
+    Returns:
+        MD5-хеш от канонического JSON-представления.
+    """
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.md5(raw).hexdigest()
 
 
 def invalidate_horoscope(sign: str, day: date) -> None:
-    """Сбрасывает все варианты кэша, где может быть гороскоп."""
+    """Сбрасывает все варианты кэша, где может быть гороскоп.
+
+    Args:
+        sign: Код знака, который изменился.
+        day: Дата, для которой изменился гороскоп.
+    """
     for content in ("all", "horoscopes"):
         cache.delete(_payload_key(sign, day, content))
         cache.delete(_payload_key(None, day, content))
@@ -144,4 +188,5 @@ def invalidate_facts() -> None:
 
 
 def invalidate_settings() -> None:
+    """Сбрасывает кэш тумблеров показа."""
     cache.delete("api:site_flags")

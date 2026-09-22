@@ -1,4 +1,7 @@
-"""Парсинг, валидация и запись импортируемого контента (XML/JSON)."""
+"""Парсинг, валидация и запись импортируемого контента.
+
+Поддерживаются форматы: JSON, XML, Excel (.xlsx) и CSV.
+"""
 
 from __future__ import annotations
 
@@ -25,10 +28,63 @@ class ImportParseError(Exception):
 
 
 def _strip(value: Any) -> str:
+    """Приводит значение к строке и убирает пробелы по краям.
+
+    Args:
+        value: Любое значение (в том числе ``None``).
+
+    Returns:
+        Строка; ``None`` превращается в ``""``.
+    """
     return str(value or "").strip()
 
 
+_HORO_TEXT_ALIASES = ("text", "forecast", "prediction", "предсказание", "прогноз", "описание")
+_HORO_ADVICE_ALIASES = ("advice", "совет", "рекомендация")
+
+
+def _normalize_horoscope_json(record, default_date) -> dict:
+    """Приводит JSON-запись гороскопа к единому виду ``{sign, date, text}``.
+
+    Принимает разные имена полей: ``text``/``forecast``/``prediction``
+    и ``advice``/``совет`` (объединяются в ``text`` через пустую строку,
+    как в табличных форматах). Дату берёт из записи, а если её нет —
+    использует дату из корня файла.
+
+    Args:
+        record: Словарь с полями гороскопа.
+        default_date: Дата по умолчанию из корня файла (может быть ``None``).
+
+    Returns:
+        Словарь с ключами ``sign``, ``date``, ``text``.
+
+    Raises:
+        ImportParseError: Если ``record`` — не словарь.
+    """
+    if not isinstance(record, dict):
+        raise ImportParseError(f"Запись гороскопа должна быть объектом, получено: {record!r}")
+    text = next((_strip(record[k]) for k in _HORO_TEXT_ALIASES if _strip(record.get(k))), "")
+    advice = next((_strip(record[k]) for k in _HORO_ADVICE_ALIASES if _strip(record.get(k))), "")
+    record = dict(record)
+    record["text"] = _combine_text(text, advice) or text or advice
+    if not _strip(record.get("date")) and default_date:
+        record["date"] = default_date
+    return record
+
+
 def validate_horoscope(record: dict) -> dict:
+    """Проверяет запись гороскопа и возвращает нормализованные поля.
+
+    Args:
+        record: Словарь с ключами ``sign``, ``date``, ``text``.
+
+    Returns:
+        Словарь ``{"sign", "date", "text"}`` с приведёнными значениями.
+
+    Raises:
+        ImportErrorValue: Если отсутствуют обязательные поля, знак не
+            распознан или дата неверна.
+    """
     missing = [f for f in REQUIRED_HOROSCOPE_FIELDS if not _strip(record.get(f, ""))]
     if missing:
         raise ImportErrorValue(f"Нет обязательных полей: {', '.join(missing)}")
@@ -49,6 +105,17 @@ def validate_horoscope(record: dict) -> dict:
 
 
 def validate_fact(record: dict) -> dict:
+    """Проверяет запись факта и возвращает нормализованные поля.
+
+    Args:
+        record: Словарь с ключами ``text``, ``category``, ``ordering``.
+
+    Returns:
+        Словарь ``{"text", "category", "ordering"}`` с приведёнными значениями.
+
+    Raises:
+        ImportErrorValue: Если текст пуст или порядок не является числом.
+    """
     if not _strip(record.get("text", "")):
         raise ImportErrorValue("Пустой текст факта")
     try:
@@ -63,7 +130,20 @@ def validate_fact(record: dict) -> dict:
 
 
 def parse_content(source: bytes, fmt: str) -> dict:
-    """Возвращает {'horoscopes': [...], 'facts': [...]} из байт файла."""
+    """Разбирает байты файла на записи гороскопов и фактов.
+
+    Args:
+        source: Содержимое файла в байтах.
+        fmt: Формат: ``json``, ``xml``, ``xlsx`` или ``csv``.
+
+    Returns:
+        Словарь ``{"horoscopes": [...], "facts": [...]}`` со «сырыми»
+        записями (до валидации).
+
+    Raises:
+        ImportParseError: Если формат неизвестен, структура неверна или
+            в файле нет ни одной записи.
+    """
     fmt = fmt.lower()
     if fmt == "json":
         try:
@@ -72,8 +152,10 @@ def parse_content(source: bytes, fmt: str) -> dict:
             raise ImportParseError(f"Некорректный JSON: {exc}") from exc
         if not isinstance(data, dict):
             raise ImportParseError("Корень JSON должен быть объектом")
-        horoscopes = data.get("horoscopes") or []
+        horoscopes = data.get("horoscopes") or data.get("horoscope") or []
         facts = data.get("facts") or []
+        default_date = data.get("date")
+        horoscopes = [_normalize_horoscope_json(rec, default_date) for rec in horoscopes]
     elif fmt == "xml":
         horoscopes, facts = _parse_xml_block(source)
     elif fmt == "xlsx":
@@ -147,6 +229,14 @@ def _resolve_columns(header) -> dict:
 
 
 def _combine_text(*parts) -> str:
+    """Склеивает непустые части текста через пустую строку.
+
+    Args:
+        *parts: Значения, которые нужно объединить.
+
+    Returns:
+        Строка с непустыми частями, разделёнными пустой строкой.
+    """
     vals = []
     for p in parts:
         if p is None:
@@ -158,6 +248,17 @@ def _combine_text(*parts) -> str:
 
 
 def _parse_header_date(value) -> date | None:
+    """Извлекает дату из заголовка столбца таблицы.
+
+    Принимает ``datetime``/``date``, формат ``ДД.ММ.ГГГГ``
+    или русский вариант «16 сентября 2026».
+
+    Args:
+        value: Значение ячейки заголовка.
+
+    Returns:
+        ``date`` или ``None``, если дата не распознана.
+    """
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -184,10 +285,20 @@ def _parse_header_date(value) -> date | None:
 
 
 def _table_to_horoscopes(rows, *, source_name: str) -> list[dict]:
-    """Разбирает таблицу в двух форматах:
+    """Разбирает таблицу (xlsx/csv) в записи гороскопов.
 
-    Длинный:  date | sign | forecast | advice
-    Широкий:  знак зодиака | период | Гороскоп на DD.MM.YYYY | ...
+    Поддерживается длинный формат (`date | sign | forecast | advice`)
+    и широкий (`знак зодиака | период | Гороскоп на DD.MM.YYYY | ...`).
+
+    Args:
+        rows: Итератор строк таблицы.
+        source_name: Имя источника (для сообщений об ошибках).
+
+    Returns:
+        Список «сырых» записей ``{"sign", "date", "text"}``.
+
+    Raises:
+        ImportParseError: Если шапка не распознана или нет строк с данными.
     """
     it = iter(rows)
     header = next(it, None)
@@ -242,6 +353,17 @@ def _table_to_horoscopes(rows, *, source_name: str) -> list[dict]:
 
 
 def _parse_xlsx_horoscopes(source: bytes) -> list[dict]:
+    """Разбирает .xlsx-файл в записи гороскопов.
+
+    Args:
+        source: Содержимое файла в байтах.
+
+    Returns:
+        Список «сырых» записей гороскопов.
+
+    Raises:
+        ImportParseError: Если файл не является корректным .xlsx.
+    """
     from io import BytesIO
 
     from openpyxl import load_workbook
@@ -255,6 +377,14 @@ def _parse_xlsx_horoscopes(source: bytes) -> list[dict]:
 
 
 def _detect_delimiter(lines: list[str]) -> str:
+    """Выбирает разделитель CSV по частоте встречаемости в тексте.
+
+    Args:
+        lines: Строки текста.
+
+    Returns:
+        Разделитель: ``";"``, ``","``, ``"\\t"`` или ``"|"``.
+    """
     best, best_count = ";", 0
     for d in (";", ",", "\t", "|"):
         count = sum(line.count(d) for line in lines[:20])
@@ -264,6 +394,17 @@ def _detect_delimiter(lines: list[str]) -> str:
 
 
 def _parse_csv_horoscopes(source: bytes) -> list[dict]:
+    """Разбирает CSV в записи гороскопов.
+
+    Args:
+        source: Содержимое файла в байтах (UTF-8, опционально с BOM).
+
+    Returns:
+        Список «сырых» записей гороскопов.
+
+    Raises:
+        ImportParseError: Если файл не в UTF-8 или CSV повреждён.
+    """
     import csv
     import io as _io
 
@@ -284,7 +425,14 @@ _TEXT_TAGS = ("forecast", "advice", "text", "description")
 
 
 def _sign_text(element) -> str:
-    """Собирает текст из дочерних тегов <forecast>/<advice>/<text>."""
+    """Собирает текст гороскопа из дочерних тегов.
+
+    Args:
+        element: XML-элемент с тегами ``<forecast>``/``<advice>``/``<text>``.
+
+    Returns:
+        Текст, объединённый пустой строкой; может быть ``""``.
+    """
     parts = []
     for child in element:
         if child.tag in _TEXT_TAGS:
@@ -293,22 +441,34 @@ def _sign_text(element) -> str:
 
 
 def _parse_xml_block(source: bytes) -> tuple[list, list]:
-    """Разбирает XML в (horoscopes, facts), принимая разные структуры:
+    """Разбирает XML в пару ``(horoscopes, facts)``.
 
-    Вариант A — плоский:
-      <content>
-        <horoscope sign="aries" date="2026-09-16">текст</horoscope>
-        <fact category="science">текст факта</fact>
-      </content>
+    Принимает разные структуры:
 
-    Вариант B — сводка от поставщика (12 знаков):
-      <horoscope date="2026-09-16" day="среда">
-        <sign name="Овен">
-          <forecast>...</forecast>
-          <advice>...</advice>
-        </sign>
-        ...
-      </horoscope>
+    Вариант A — плоский::
+
+        <content>
+          <horoscope sign="aries" date="2026-09-16">текст</horoscope>
+          <fact category="science">текст факта</fact>
+        </content>
+
+    Вариант B — сводка от поставщика (12 знаков)::
+
+        <horoscope date="2026-09-16" day="среда">
+          <sign name="Овен">
+            <forecast>...</forecast>
+            <advice>...</advice>
+          </sign>
+        </horoscope>
+
+    Args:
+        source: Содержимое файла в байтах.
+
+    Returns:
+        Кортеж ``(horoscopes, facts)`` со «сырыми» записями.
+
+    Raises:
+        ImportParseError: Если XML некорректен или небезопасен.
     """
     try:
         root = DefusedET.fromstring(source)
@@ -356,11 +516,20 @@ class ImportResult:
     records: dict = field(default_factory=dict)
 
     def total(self) -> int:
+        """Суммарное количество обработанных записей.
+
+        Returns:
+            ``added + updated + unchanged``.
+        """
         return self.added + self.updated + self.unchanged
 
 
 class ContentImporter:
-    """Валидирует записи, делает diff с БД и по желанию применяет изменения."""
+    """Валидирует записи, делает diff с БД и применяет изменения.
+
+    Можно использовать и как «предпросмотр» (`preview_rows`/`preview_summary`),
+    и для фактического сохранения (`commit`).
+    """
 
     def __init__(
         self,
@@ -370,6 +539,15 @@ class ContentImporter:
         force_update_text: bool = True,
         mark_draft: bool = False,
     ):
+        """Создаёт импортёр из байтов файла.
+
+        Args:
+            source: Содержимое файла в байтах.
+            fmt: Формат: ``json``, ``xml``, ``xlsx`` или ``csv``.
+            force_update_text: Перезаписывать ли текст существующих
+                гороскопов при совпадении ``(sign, date)``.
+            mark_draft: Помечать ли новые гороскопы черновиком.
+        """
         self.fmt = fmt.lower()
         parsed = parse_content(source, self.fmt)
         self.horoscopes: list[dict] = []
@@ -391,9 +569,19 @@ class ContentImporter:
                 self.errors.append(("fact", i, str(exc)))
 
     def has_valid_records(self) -> bool:
+        """Есть ли хотя бы одна валидная запись (гороскоп или факт).
+
+        Returns:
+            ``True``, если файл можно импортировать.
+        """
         return bool(self.horoscopes or self.facts)
 
     def _diff_rows(self) -> list[dict]:
+        """Строит полный список строк предпросмотра.
+
+        Returns:
+            Список словарей со статусами ``add``/``update``/``unchanged``/``error``.
+        """
         rows = [
             {"kind": kind, "row": i, "status": "error", "detail": err}
             for kind, i, err in self.errors
@@ -405,6 +593,14 @@ class ContentImporter:
         return rows
 
     def _diff_horoscope(self, rec: dict) -> dict:
+        """Определяет статус записи гороскопа относительно БД.
+
+        Args:
+            rec: Валидированная запись ``{"sign", "date", "text"}``.
+
+        Returns:
+            Словарь ``{"kind", "key", "status"}``.
+        """
         exists = Horoscope.objects.filter(sign=rec["sign"], date=rec["date"]).first()
         key = f"{rec['sign']} · {rec['date']}"
         if exists is None:
@@ -414,18 +610,42 @@ class ContentImporter:
         return {"kind": "horoscope", "key": key, "status": "unchanged"}
 
     def _diff_fact(self, rec: dict) -> dict:
+        """Определяет статус записи факта относительно БД.
+
+        Args:
+            rec: Валидированная запись ``{"text", "category", "ordering"}``.
+
+        Returns:
+            Словарь ``{"kind", "key", "status"}``.
+        """
         if Fact.objects.filter(text=rec["text"]).exists():
             return {"kind": "fact", "key": rec["text"][:45], "status": "unchanged"}
         return {"kind": "fact", "key": rec["text"][:45], "status": "add"}
 
     def preview_rows(self) -> list[dict]:
+        """Возвращает построчную разницу файла с базой.
+
+        Returns:
+            Список строк предпросмотра (см. ``_diff_rows``).
+        """
         return self._diff_rows()
 
     def preview_summary(self) -> dict:
+        """Возвращает сводку по статусам всех записей.
+
+        Returns:
+            Словарь со счётчиками ``add``/``update``/``unchanged``/``error``.
+        """
         rows = self._diff_rows()
         return {status: sum(1 for r in rows if r["status"] == status) for status in ("add", "update", "unchanged", "error")}
 
     def commit(self) -> ImportResult:
+        """Применяет изменения в базу данных.
+
+        Returns:
+            Объект :class:`ImportResult` со счётчиками ``added``/``updated``/
+            ``unchanged`` и списком ``errors``.
+        """
         result = ImportResult()
         result.errors = [f"{kind} #{i}: {err}" for kind, i, err in self.errors]
 
@@ -457,6 +677,16 @@ class ContentImporter:
 
     @staticmethod
     def save_log(filename: str, fmt: str, result: ImportResult) -> ImportLog:
+        """Сохраняет запись об импорте в журнал.
+
+        Args:
+            filename: Имя файла-источника.
+            fmt: Формат файла (``json``, ``xml``, ``xlsx``, ``csv``).
+            result: Результат импорта.
+
+        Returns:
+            Созданная запись :class:`ImportLog`.
+        """
         status = ImportLog.Status.ERROR
         if result.added or result.updated:
             status = ImportLog.Status.SUCCESS if not result.errors else ImportLog.Status.PARTIAL

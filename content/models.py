@@ -1,5 +1,6 @@
 """Модели данных: гороскопы, факты и настройки показа для API."""
 
+from django.core.exceptions import ValidationError
 from django.db import models
 
 FACT_LIMIT_DEFAULT = 5
@@ -114,6 +115,23 @@ class SiteSettings(models.Model):
         help_text="Если включено, запрос без параметра sign вернёт все знаки "
         "в случайном порядке (порядок меняется при каждом обращении).",
     )
+    scheduled_fact_category = models.CharField(
+        "Категория фактов по расписанию",
+        max_length=64,
+        blank=True,
+        help_text="В указанный период API отдаёт только активные факты этой категории.",
+    )
+    scheduled_facts_start = models.DateField(
+        "Начало периода",
+        null=True,
+        blank=True,
+    )
+    scheduled_facts_end = models.DateField(
+        "Окончание периода",
+        null=True,
+        blank=True,
+        help_text="Начальная и конечная даты входят в период.",
+    )
 
     class Meta:
         verbose_name = "Настройки показа"
@@ -121,6 +139,26 @@ class SiteSettings(models.Model):
 
     def __str__(self):
         return "Настройки показа"
+
+    def clean(self):
+        super().clean()
+        schedule = (
+            bool(self.scheduled_fact_category),
+            self.scheduled_facts_start is not None,
+            self.scheduled_facts_end is not None,
+        )
+        if any(schedule) and not all(schedule):
+            raise ValidationError(
+                "Для расписания укажите категорию, дату начала и дату окончания."
+            )
+        if (
+            self.scheduled_facts_start
+            and self.scheduled_facts_end
+            and self.scheduled_facts_start > self.scheduled_facts_end
+        ):
+            raise ValidationError(
+                {"scheduled_facts_end": "Дата окончания не может быть раньше даты начала."}
+            )
 
     @classmethod
     def load(cls) -> "SiteSettings":

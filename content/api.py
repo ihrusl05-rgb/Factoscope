@@ -36,17 +36,32 @@ def _payload_key(sign: str, day, content: str = "all") -> str:
 
 
 def _flags() -> dict:
-    """Возвращает текущие тумблеры показа с кэшированием на 30 секунд.
+    """Возвращает текущие настройки показа с кэшированием на 30 секунд.
 
     Returns:
-        Словарь ``{"shuffle_facts": bool, "shuffle_horoscopes": bool}``.
+        Словарь с тумблерами и расписанием категории фактов.
     """
     flags = cache.get("api:site_flags")
     if flags is None:
         s = SiteSettings.load()
-        flags = {"shuffle_facts": s.shuffle_facts, "shuffle_horoscopes": s.shuffle_horoscopes}
+        flags = {
+            "shuffle_facts": s.shuffle_facts,
+            "shuffle_horoscopes": s.shuffle_horoscopes,
+            "scheduled_fact_category": s.scheduled_fact_category,
+            "scheduled_facts_start": s.scheduled_facts_start,
+            "scheduled_facts_end": s.scheduled_facts_end,
+        }
         cache.set("api:site_flags", flags, timeout=FLAGS_TTL)
     return flags
+
+
+def _scheduled_fact_category(flags: dict, day: date) -> str | None:
+    category = flags["scheduled_fact_category"]
+    start = flags["scheduled_facts_start"]
+    end = flags["scheduled_facts_end"]
+    if category and start and end and start <= day <= end:
+        return category
+    return None
 
 
 def build_daily_payload(sign: str | None, day: date, content: str = "all") -> dict:
@@ -71,9 +86,13 @@ def build_daily_payload(sign: str | None, day: date, content: str = "all") -> di
         "sign": sign,
     }
     if content != "horoscopes":
+        facts = Fact.objects.filter(is_active=True)
+        scheduled_category = _scheduled_fact_category(flags, day)
+        if scheduled_category:
+            facts = facts.filter(category=scheduled_category)
         payload["facts"] = [
             {"text": f.text, "category": f.category}
-            for f in Fact.objects.filter(is_active=True).order_by("ordering", "id")
+            for f in facts.order_by("ordering", "id")
         ]
         if flags["shuffle_facts"]:
             random.shuffle(payload["facts"])
@@ -188,5 +207,6 @@ def invalidate_facts() -> None:
 
 
 def invalidate_settings() -> None:
-    """Сбрасывает кэш тумблеров показа."""
+    """Сбрасывает кэш настроек и пакетов с фактами."""
     cache.delete("api:site_flags")
+    invalidate_facts()

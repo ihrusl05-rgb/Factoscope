@@ -4,6 +4,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -321,6 +322,27 @@ class MakeTemplateCommandTests(TestCase):
             self.assertEqual(len(rows), 1 + 31 * 12)
 
 
+class SiteSettingsTests(TestCase):
+    def test_fact_schedule_requires_category_and_both_dates(self):
+        settings = SiteSettings(
+            scheduled_fact_category="new_year",
+            scheduled_facts_start=date(2026, 12, 1),
+        )
+
+        with self.assertRaisesMessage(ValidationError, "укажите категорию"):
+            settings.full_clean()
+
+    def test_fact_schedule_end_cannot_be_before_start(self):
+        settings = SiteSettings(
+            scheduled_fact_category="new_year",
+            scheduled_facts_start=date(2026, 12, 10),
+            scheduled_facts_end=date(2026, 12, 1),
+        )
+
+        with self.assertRaisesMessage(ValidationError, "не может быть раньше"):
+            settings.full_clean()
+
+
 class ApiTests(TestCase):
     def setUp(self):
         Horoscope.objects.create(sign="aries", date=date(2026, 9, 16), text="Гороскоп Овна")
@@ -439,6 +461,46 @@ class ApiTests(TestCase):
         signs = [h["sign"] for h in data["horoscopes"]]
         self.assertEqual(set(signs), {"aries"})
         self.assertEqual(len(signs), 1)
+
+    def test_scheduled_fact_category_applies_on_inclusive_period(self):
+        settings = SiteSettings.load()
+        settings.scheduled_fact_category = "science"
+        settings.scheduled_facts_start = date(2026, 12, 1)
+        settings.scheduled_facts_end = date(2026, 12, 31)
+        settings.full_clean()
+        settings.save()
+
+        expected = {
+            "2026-11-30": {"science", "animals"},
+            "2026-12-01": {"science"},
+            "2026-12-31": {"science"},
+            "2027-01-01": {"science", "animals"},
+        }
+        for requested_date, categories in expected.items():
+            with self.subTest(date=requested_date):
+                response = self.client.get(
+                    "/api/facts",
+                    {"date": requested_date, "limit": 100},
+                )
+                returned = {fact["category"] for fact in json.loads(response.content)["facts"]}
+                self.assertEqual(returned, categories)
+
+    def test_schedule_change_invalidates_cached_facts(self):
+        params = {"date": "2026-09-16", "limit": 100}
+        first = self.client.get("/api/facts", params)
+        self.assertEqual(len(json.loads(first.content)["facts"]), 2)
+
+        settings = SiteSettings.load()
+        settings.scheduled_fact_category = "science"
+        settings.scheduled_facts_start = date(2026, 9, 16)
+        settings.scheduled_facts_end = date(2026, 9, 16)
+        settings.save()
+
+        second = self.client.get("/api/facts", params)
+        self.assertEqual(
+            [fact["category"] for fact in json.loads(second.content)["facts"]],
+            ["science"],
+        )
 
     def test_invalid_date_is_400(self):
         r = self.client.get("/api/today", {"sign": "aries", "date": "16.09.2026"})
@@ -565,12 +627,53 @@ class AdminImportTests(TestCase):
             self.assertContains(r, "data-charcount")
             self.assertContains(r, "admin/js/char_counter.js")
 
+    def test_settings_form_offers_existing_fact_categories(self):
+        Fact.objects.create(text="Новогодний факт", category="new_year")
+        settings = SiteSettings.load()
+
+        response = self.client.get(
+            reverse("admin:content_sitesettings_change", args=(settings.pk,))
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<option value="new_year">new_year</option>', html=False)
+        self.assertContains(response, "Не настроено")
+
+    def test_selecting_no_schedule_clears_dates(self):
+        settings = SiteSettings.load()
+        settings.scheduled_fact_category = "new_year"
+        settings.scheduled_facts_start = date(2026, 12, 1)
+        settings.scheduled_facts_end = date(2027, 1, 10)
+        settings.save()
+
+        response = self.client.post(
+            reverse("admin:content_sitesettings_change", args=(settings.pk,)),
+            {
+                "shuffle_facts": "",
+                "shuffle_horoscopes": "",
+                "scheduled_fact_category": "",
+                "scheduled_facts_start": "2026-12-01",
+                "scheduled_facts_end": "2027-01-10",
+                "_save": "Сохранить",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        settings.refresh_from_db()
+        self.assertEqual(settings.scheduled_fact_category, "")
+        self.assertIsNone(settings.scheduled_facts_start)
+        self.assertIsNone(settings.scheduled_facts_end)
+
     def test_fact_list_shows_character_count_after_text(self):
         fact = Fact.objects.create(text="Факт из 16 знаков", category="science")
         r = self.client.get(reverse("admin:content_fact_changelist"))
 
         self.assertEqual(r.status_code, 200)
-        self.assertContains(r, '<th scope="col" class="column-character_count">', html=False)
+        self.assertContains(
+            r,
+            '<th scope="col" class="sortable column-character_count">',
+            html=False,
+        )
         self.assertContains(r, "Символов")
         self.assertContains(
             r,
@@ -597,6 +700,29 @@ class AdminImportTests(TestCase):
         )
         self.assertLess(r.content.index(b"column-text_short"), r.content.index(b"column-character_count"))
         self.assertLess(r.content.index(b"column-character_count"), r.content.index(b"column-is_draft"))
+
+    def test_character_count_columns_are_sortable(self):
+        Fact.objects.create(text="Длинный текст факта")
+        Fact.objects.create(text="Факт")
+        fact_response = self.client.get(
+            reverse("admin:content_fact_changelist"),
+            {"o": "2"},
+        )
+        self.assertEqual(
+            [fact.text for fact in fact_response.context["cl"].result_list],
+            ["Факт", "Длинный текст факта"],
+        )
+
+        Horoscope.objects.create(sign="aries", date="2026-09-18", text="Длинный прогноз")
+        Horoscope.objects.create(sign="taurus", date="2026-09-18", text="Кратко")
+        horoscope_response = self.client.get(
+            reverse("admin:content_horoscope_changelist"),
+            {"o": "4"},
+        )
+        self.assertEqual(
+            [horoscope.text for horoscope in horoscope_response.context["cl"].result_list],
+            ["Кратко", "Длинный прогноз"],
+        )
 
     def test_shuffle_facts_action_reverses_order(self):
         from unittest.mock import patch

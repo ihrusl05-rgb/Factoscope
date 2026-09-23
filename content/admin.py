@@ -4,10 +4,12 @@ import os
 import random
 import uuid
 
+from django import forms
 from django.conf import settings
 from django.contrib import admin, messages
 from django.core.files.uploadedfile import UploadedFile
 from django.db import models
+from django.db.models.functions import Length
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import path, reverse
@@ -174,7 +176,7 @@ class HoroscopeAdmin(admin.ModelAdmin):
     def text_short(self, obj):
         return obj.text[:70]
 
-    @admin.display(description="Символов")
+    @admin.display(description="Символов", ordering=Length("text"))
     def character_count(self, obj):
         return len(obj.text)
 
@@ -194,7 +196,7 @@ class FactAdmin(admin.ModelAdmin):
     def text_short(self, obj):
         return obj.text[:70]
 
-    @admin.display(description="Символов")
+    @admin.display(description="Символов", ordering=Length("text"))
     def character_count(self, obj):
         return len(obj.text)
 
@@ -218,7 +220,80 @@ class ImportLogAdmin(admin.ModelAdmin):
 
 @admin.register(SiteSettings)
 class SiteSettingsAdmin(admin.ModelAdmin):
-    """Синглтон-настройки показа: тумблеры случайного порядка в API."""
+    """Синглтон-настройки показа контента в API."""
+
+    class SettingsForm(forms.ModelForm):
+        class Meta:
+            model = SiteSettings
+            fields = "__all__"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            categories = list(
+                Fact.objects.exclude(category="")
+                .order_by("category")
+                .values_list("category", flat=True)
+                .distinct()
+            )
+            current = self.instance.scheduled_fact_category
+            if current and current not in categories:
+                categories.append(current)
+            self.fields["scheduled_fact_category"].widget = forms.Select(
+                choices=[("", "Без расписания")]
+                + [(category, category) for category in sorted(categories)]
+            )
+
+        def clean(self):
+            cleaned_data = super().clean()
+            if not cleaned_data.get("scheduled_fact_category"):
+                cleaned_data["scheduled_facts_start"] = None
+                cleaned_data["scheduled_facts_end"] = None
+            return cleaned_data
+
+    form = SettingsForm
+    readonly_fields = ("fact_schedule_status",)
+    fieldsets = (
+        (
+            "Общие настройки",
+            {"fields": ("shuffle_facts", "shuffle_horoscopes")},
+        ),
+        (
+            "Факты по расписанию",
+            {
+                "fields": (
+                    "fact_schedule_status",
+                    "scheduled_fact_category",
+                    "scheduled_facts_start",
+                    "scheduled_facts_end",
+                ),
+                "description": (
+                    "Внутри периода API отдаёт только активные факты выбранной категории. "
+                    "Вне периода возвращаются все активные факты."
+                ),
+            },
+        ),
+    )
+
+    @admin.display(description="Статус")
+    def fact_schedule_status(self, obj):
+        if not (
+            obj
+            and obj.scheduled_fact_category
+            and obj.scheduled_facts_start
+            and obj.scheduled_facts_end
+        ):
+            return "Не настроено"
+
+        today = timezone.localdate()
+        period = (
+            f"{obj.scheduled_facts_start:%d.%m.%Y}–"
+            f"{obj.scheduled_facts_end:%d.%m.%Y}"
+        )
+        if today < obj.scheduled_facts_start:
+            return f"Ожидается: {obj.scheduled_fact_category} ({period})"
+        if today > obj.scheduled_facts_end:
+            return f"Завершено: {obj.scheduled_fact_category} ({period})"
+        return f"Активно: {obj.scheduled_fact_category} ({period})"
 
     def has_add_permission(self, request):
         return not SiteSettings.objects.exists()

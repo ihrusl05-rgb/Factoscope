@@ -46,7 +46,7 @@ class Migration(migrations.Migration):
             name='Horoscope',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('sign', models.CharField(choices=[('aries', 'Овен'), ('taurus', 'Телец'), ('gemini', 'Близнецы'), ('cancer', 'Рак'), ('leo', 'Лев'), ('virgo', 'Дева'), ('libra', 'Весы'), (Водолей'scorpio', 'Скорпион'), ('sagittarius', 'Стрелец'), ('capricorn', 'Козерог'), ('aquarius', ''), ('pisces', 'Рыбы')], db_index=True, max_length=16, verbose_name='Знак зодиака')),
+                ('sign', models.CharField(choices=[('aries', 'Овен'), ('taurus', 'Телец'), ('gemini', 'Близнецы'), ('cancer', 'Рак'), ('leo', 'Лев'), ('virgo', 'Дева'), ('libra', 'Весы'), ('scorpio', 'Скорпион'), ('sagittarius', 'Стрелец'), ('capricorn', 'Козерог'), ('aquarius', 'Водолей'), ('pisces', 'Рыбы')], db_index=True, max_length=16, verbose_name='Знак зодиака')),
                 ('date', models.DateField(db_index=True, verbose_name='Дата')),
                 ('text', models.TextField(verbose_name='Текст')),
                 ('is_active', models.BooleanField(default=True, verbose_name='Показывать')),

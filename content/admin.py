@@ -53,12 +53,12 @@ def _toggle_active(modeladmin, request, queryset, value: bool):
     modeladmin.message_user(request, f"Отмечено {count} записей: {state}.")
 
 
-@admin.action(description="Показывать выделенные")
+@admin.action(description="Отправить в эфир")
 def make_active(modeladmin, request, queryset):
     _toggle_active(modeladmin, request, queryset, True)
 
 
-@admin.action(description="Скрыть выделенные")
+@admin.action(description="Снять с эфира")
 def make_inactive(modeladmin, request, queryset):
     _toggle_active(modeladmin, request, queryset, False)
 
